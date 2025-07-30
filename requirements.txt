@@ -1,2 +1,7 @@
 flask
 qrcode[pil]
+fastapi
+uvicorn
+python-multipart
+qrcode
+pillow
