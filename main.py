@@ -1,20 +1,21 @@
-from fastapi import FastAPI, Request
+from fastapi import FastAPI
 from pydantic import BaseModel
 import qrcode
 import base64
 from io import BytesIO
-import os
 from datetime import datetime
 from fastapi.responses import JSONResponse
-from fastapi.staticfiles import StaticFiles
+import cloudinary
+import cloudinary.uploader
+
+# إعداد Cloudinary
+cloudinary.config(
+    cloud_name="dprycvrhz",
+    api_key="426522214543791",
+    api_secret="m2fv1N33PtKaBMjV25At0C1aUQM"
+)
 
 app = FastAPI()
-
-# Serve static files (QR images)
-app.mount("/static", StaticFiles(directory="static"), name="static")
-
-# Ensure folder exists
-os.makedirs("static/qr_images", exist_ok=True)
 
 class QRRequest(BaseModel):
     sellerName: str
@@ -26,7 +27,7 @@ class QRRequest(BaseModel):
 @app.post("/generate_qr")
 async def generate_qr(data: QRRequest):
     try:
-        # Generate the TLV (Tag-Length-Value) structure
+        # توليد TLV (Tag-Length-Value)
         def to_tlv(tag, value):
             value_bytes = value.encode('utf-8')
             return bytes([tag]) + bytes([len(value_bytes)]) + value_bytes
@@ -41,20 +42,24 @@ async def generate_qr(data: QRRequest):
 
         base64_tlv = base64.b64encode(tlv_bytes).decode('utf-8')
 
-        # Generate QR code
+        # توليد QR كصورة
         qr = qrcode.QRCode(version=1, box_size=10, border=4)
         qr.add_data(base64_tlv)
         qr.make(fit=True)
         img = qr.make_image(fill='black', back_color='white')
 
-        # Save QR image to static/qr_images with unique name
-        timestamp = datetime.now().strftime("%Y%m%d%H%M%S%f")
-        filename = f"qr_{timestamp}.png"
-        filepath = os.path.join("static", "qr_images", filename)
-        img.save(filepath)
+        # تحويل الصورة إلى BytesIO
+        img_buffer = BytesIO()
+        img.save(img_buffer, format="PNG")
+        img_buffer.seek(0)
 
-        image_url = f"https://zatca-qr-api-t0ix.onrender.com/static/qr_images/{filename}"
+        # رفع الصورة إلى Cloudinary
+        public_id = f"qr_{datetime.now().strftime('%Y%m%d%H%M%S%f')}"
+        result = cloudinary.uploader.upload(img_buffer, public_id=public_id, folder="zatca_qr")
 
+        # رابط الصورة
+        image_url = result.get("secure_url")
         return JSONResponse({"qr_code_url": image_url})
+
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": str(e)})
