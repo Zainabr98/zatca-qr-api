@@ -1,39 +1,71 @@
-
-from flask import Flask, request, jsonify
-import base64
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 import qrcode
-from io import BytesIO
+import base64
+import os
+from datetime import datetime
+from fastapi.responses import FileResponse
 
-app = Flask(__name__)
+app = FastAPI()
 
-def encode_tlv(tag, value):
-    value_bytes = value.encode('utf-8')
-    return bytes([tag]) + bytes([len(value_bytes)]) + value_bytes
+# CORS
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-@app.route('/generate_qr', methods=['POST'])
-def generate_qr():
-    data = request.json
-    try:
-        tlv = b''.join([
-            encode_tlv(1, data['sellerName']),
-            encode_tlv(2, data['vatRegistrationNumber']),
-            encode_tlv(3, data['timeStamp']),
-            encode_tlv(4, data['invoiceTotal']),
-            encode_tlv(5, data['vatTotal']),
-        ])
-        b64_tlv = base64.b64encode(tlv).decode('utf-8')
+# Model
+class InvoiceData(BaseModel):
+    sellerName: str
+    vatRegistrationNumber: str
+    timeStamp: str
+    invoiceTotal: str
+    vatTotal: str
 
-        img = qrcode.make(b64_tlv)
-        buffer = BytesIO()
-        img.save(buffer, format="PNG")
-        img_base64 = base64.b64encode(buffer.getvalue()).decode("utf-8")
+# Make sure the directory exists
+os.makedirs("static/qr_images", exist_ok=True)
 
-        return jsonify({
-            "base64_tlv": b64_tlv,
-            "qr_code_image": f"data:image/png;base64,{img_base64}"
-        })
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+@app.post("/generate_qr")
+def generate_qr(data: InvoiceData):
+    # Construct TLV structure
+    def to_tlv(tag, value):
+        return bytes([tag]) + bytes([len(value.encode('utf-8'))]) + value.encode('utf-8')
 
-if __name__ == '__main__':
-    app.run(host="0.0.0.0", port=10000)
+    tlv_bytes = b"".join([
+        to_tlv(1, data.sellerName),
+        to_tlv(2, data.vatRegistrationNumber),
+        to_tlv(3, data.timeStamp),
+        to_tlv(4, data.invoiceTotal),
+        to_tlv(5, data.vatTotal)
+    ])
+
+    base64_tlv = base64.b64encode(tlv_bytes).decode('utf-8')
+
+    # Generate QR
+    qr = qrcode.QRCode(version=1, box_size=10, border=4)
+    qr.add_data(base64_tlv)
+    qr.make(fit=True)
+
+    img = qr.make_image(fill="black", back_color="white")
+
+    # Save image to static folder
+    filename = f"qr_{datetime.utcnow().strftime('%Y%m%d%H%M%S%f')}.png"
+    filepath = os.path.join("static", "qr_images", filename)
+    img.save(filepath)
+
+    # Construct public URL
+    base_url = "https://zatca-qr-api-t0ix.onrender.com"
+    qr_code_url = f"{base_url}/static/qr_images/{filename}"
+
+    return {
+        "base64_tlv": base64_tlv,
+        "qr_code_url": qr_code_url
+    }
+
+@app.get("/")
+def home():
+    return {"message": "ZATCA QR API is running!"}
